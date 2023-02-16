@@ -1,13 +1,15 @@
+import { HttpClient } from '@angular/common/http';
 import { Injectable } from '@angular/core';
 import {
   distinctUntilChanged,
+  map,
   Observable,
   Observer,
   Subscriber,
   TeardownLogic,
 } from 'rxjs';
 import { ResourceLoaderService } from './resource-loader.service';
-import { ShopInterface } from './shop-interface';
+import { ResourceInterface, ShopInterface } from './shop-interface';
 
 @Injectable()
 export class ShopService {
@@ -15,9 +17,12 @@ export class ShopService {
     string | number,
     { observable: Observable<any>; loadedData: any }
   >();
-  constructor(private resourceLoader: ResourceLoaderService) {}
+  constructor(
+    private httpClient: HttpClient,
+    private resourceLoader: ResourceLoaderService
+  ) {}
 
-  getById(id: string | number): Observable<ShopInterface> {
+  getById(id: string | number): Observable<ResourceInterface<ShopInterface>> {
     const existing = this.observableStore.get(id);
     if (existing) {
       return existing.observable;
@@ -28,12 +33,14 @@ export class ShopService {
   }
 
   private createNewAsyncShop(id: string | number): {
-    observable: Observable<ShopInterface>;
-    loadedData: ShopInterface | null;
+    observable: Observable<ResourceInterface<ShopInterface>>;
+    loadedData: ResourceInterface<ShopInterface> | null;
   } {
     return {
-      observable: new Observable<ShopInterface>(
-        this.multicastSequencer<ShopInterface>(this.loadShopData(id))
+      observable: new Observable<ResourceInterface<ShopInterface>>(
+        this.multicastSequencer<ResourceInterface<ShopInterface>>(
+          this.loadShopData(id)
+        )
       ).pipe(
         distinctUntilChanged((prev, current) => this.deepCompare(prev, current))
       ),
@@ -43,41 +50,72 @@ export class ShopService {
 
   private loadShopData(
     id: string | number
-  ): (observer: Observer<ShopInterface>) => void {
-    return (observer: Observer<ShopInterface>) => {
+  ): (observer: Observer<ResourceInterface<ShopInterface>>) => void {
+    return (observer: Observer<ResourceInterface<ShopInterface>>) => {
       const existing = this.observableStore.get(id);
       if (existing.loadedData) {
         observer.next(existing.loadedData);
         observer.complete();
       } else {
-        // TODO
-        // const worker = new Worker('ssfasdfa);
-        
+        // TODO implement Worker to make it asynchronous!
         // no data yet
-        this.resourceLoader.getShopById(id).subscribe(
-          (shop: ShopInterface) => {
-            existing.loadedData = shop;
-            observer.next(shop);
-          },
-          (error) => {
-            observer.complete();
-          },
-          () => {
-            observer.complete();
-          }
-        );
+        // 5 hours 5 * 3600 * 1000
+        this.resourceLoader
+          .getShopById<ShopInterface>(id, {
+            subscribable: this.networkLoader(id),
+            freshness: 10 * 1000,
+          })
+          .subscribe({
+            next: (resource: ResourceInterface<ShopInterface>) => {
+              existing.loadedData = resource;
+              observer.next(resource);
+            },
+            complete: () => {
+              observer.complete();
+            },
+            error: (error) => {
+              console.error(error);
+              observer.complete();
+            },
+          });
       }
     };
   }
 
-  private deepCompare(a: ShopInterface, b: ShopInterface): boolean {
-    const aKeys = Object.keys(a);
-    const bKeys = Object.keys(b);
+  private networkLoader(id: string | number): Observable<ShopInterface> {
+    return this.httpClient
+      .get(
+        'https://www.alpinresorts.com/de/service/ski-rental/shops/%shopId%?&currencyCode=EUR'.replace(
+          '%shopId%',
+          id.toString()
+        ),
+        { headers: { Accept: 'application/json' }, observe: 'response' }
+      )
+      .pipe(
+        map((response) => {
+          //console.log(new Date(response.headers.get('expires')));
+          return {
+            id: response.body['id'], // 136 | A136
+            name: response.body['name'], // Robin's awesome webshop for skis
+            adress: response.body['address'], // Austria, 1120 Vienna
+            image: response.body['imagePathBig'], // url};
+            timestamp: Date.now(), //- 20 * 1000, // now - 20 sec
+          };
+        })
+      );
+  }
+
+  private deepCompare(
+    a: ResourceInterface<any>,
+    b: ResourceInterface<any>
+  ): boolean {
+    const aKeys = Object.keys(a.data);
+    const bKeys = Object.keys(b.data);
     if (aKeys.length !== bKeys.length) {
       return false;
     }
-    for (let key of Object.keys(a)) {
-      if (a[key] !== b[key]) {
+    for (let key of Object.keys(a.data)) {
+      if (a.data[key] !== b.data[key]) {
         return false;
       }
     }

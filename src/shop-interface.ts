@@ -8,3 +8,16 @@ export interface ShopInterface extends TimeStampInterface {
 export interface TimeStampInterface {
   timestamp: number; // time in milli(!)seconds since 01.01.1970
 }
+
+
+export interface ResourceInterface<T> {
+  data: T;
+  origin: ResourceOrigin;
+}
+
+export enum ResourceOrigin {
+  memory,
+  transferstate,
+  idb,
+  network
+}

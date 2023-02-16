@@ -1,107 +1,173 @@
 import { isPlatformBrowser } from '@angular/common';
-import { HttpClient } from '@angular/common/http';
 import { Inject, Injectable, PLATFORM_ID } from '@angular/core';
 import { makeStateKey, TransferState } from '@angular/platform-browser';
 import { map, Observable, tap } from 'rxjs';
-import { ShopInterface } from './shop-interface';
+import {
+  ResourceInterface,
+  ResourceOrigin,
+  ShopInterface,
+  TimeStampInterface,
+} from './shop-interface';
 
 @Injectable()
 export class ResourceLoaderService {
-  private isBrowser: boolean;
+  private readonly objectStoreHandle = 'shops';
   private readonly indexedDBversion = 1;
+  private isBrowser: boolean;
   private dbopenrequest: IDBOpenDBRequest;
   private objectStore: IDBObjectStore;
-  private readonly objectStoreHandle = 'shops';
   private db: IDBDatabase;
 
-  //private transaction: IDBTransaction;
-
   constructor(
-    private httpClient: HttpClient,
     private transferState: TransferState,
     @Inject(PLATFORM_ID) platformId: Object
   ) {
     this.isBrowser = isPlatformBrowser(platformId);
-    if (this.isBrowser) {
-      this.initDB('readwrite');
-    }
   }
 
-  getShopById(id: string | number): Observable<ShopInterface> {
+  getShopById<T extends TimeStampInterface>(
+    id: string | number,
+    networkLoader?: { subscribable: Observable<T>; freshness?: number }
+  ): Observable<ResourceInterface<T>> {
     return new Observable((observer) => {
       const uniqueIdentifier = 'shop-' + id;
-      const transferKey = makeStateKey<ShopInterface>(uniqueIdentifier);
+      const transferKey = makeStateKey<T>(uniqueIdentifier);
       if (this.isBrowser) {
         try {
-          this.initDB('readonly', null, id);
-          /*const req: IDBRequest<ShopInterface> = this.objectStore.get(id);
-            console.log(req);
-            req.onsuccess = (event: Event) => {
-              console.log(req.result);
-              observer.next(req.result);
+          this.getObjectStore(
+            this.objectStoreHandle,
+            'readonly',
+            this.indexedDBversion
+          ).subscribe((objectStore) => {
+            const result = objectStore.get(id);
+            result.onsuccess = (event: Event) => {
+              const shop = result.result as T;
+              if (shop) {
+                console.log('read IDB:', shop);
+                observer.next({ data: shop, origin: ResourceOrigin.idb });
+                console.log(
+                  'comparing:',
+                  new Date(Date.now() - networkLoader.freshness),
+                  new Date(shop.timestamp),
+                  Date.now() - networkLoader.freshness - shop.timestamp
+                );
+                if (
+                  networkLoader &&
+                  Date.now() - networkLoader.freshness > shop.timestamp
+                ) {
+                  networkLoader.subscribable
+                    .pipe(
+                      tap((data) => {
+                        if (!this.isBrowser) {
+                          this.transferState.set(transferKey, data);
+                        } else {
+                          this.updateResourceInIDB(data);
+                        }
+                      })
+                    )
+                    .subscribe((data) => {
+                      observer.next({
+                        data: data,
+                        origin: ResourceOrigin.network,
+                      });
+                    });
+                }
+              } else {
+                // no shop in db
+                // TODO: we always connect to the server! no 'stale' functionality right now
+                if (networkLoader) {
+                  networkLoader.subscribable
+                    .pipe(
+                      tap((data) => {
+                        if (!this.isBrowser) {
+                          this.transferState.set(transferKey, data);
+                        } else {
+                          this.updateResourceInIDB(data);
+                        }
+                      })
+                    )
+                    .subscribe((data) => {
+                      observer.next({
+                        data: data,
+                        origin: ResourceOrigin.network,
+                      });
+                    });
+                }
+              }
             };
-            req.onerror = (event: Event) => {
-              console.error(event);
-            }; */
+            result.onerror = (event: Event) => {
+              console.error('error accessing idb.', event);
+            };
+          });
           // TODO: null result? what now?
         } catch (e) {
           console.error(e);
         }
+        // TODO: move me higher in the chain!
         if (this.transferState.hasKey(transferKey)) {
           const shop = this.transferState.get(transferKey, null);
-          observer.next(shop);
+          observer.next({ data: shop, origin: ResourceOrigin.transferstate });
         }
       }
-
-      // TODO: we always connect to the server! no 'stale' functionality right now
-      this.httpClient
-        .get(
-          'https://www.alpinresorts.com/de/service/ski-rental/shops/%shopId%?&currencyCode=EUR'.replace(
-            '%shopId%',
-            id.toString()
-          ),
-          { headers: { Accept: 'application/json' }, observe: 'response' }
-        )
-        .pipe(
-          map((response) => {
-            //console.log(new Date(response.headers.get('expires')));
-            return {
-              id: response.body['id'], // 136 | A136
-              name: response.body['name'], // Robin's awesome webshop for skis
-              adress: response.body['address'], // Austria, 1120 Vienna
-              image: response.body['imagePathBig'], // url};
-              timestamp: Date.now(), // now
-            };
-          }),
-          tap((shop) => {
-            if (!this.isBrowser) {
-              this.transferState.set(transferKey, shop);
-            } else {
-              this.updateResourceInIDB(shop, id);
-            }
-          })
-        )
-        .subscribe((shop) => {
-          observer.next(shop);
-        });
     });
   }
 
-  private updateResourceInIDB<T>(resource: T, id: string | number) {
+  private updateResourceInIDB<T extends TimeStampInterface>(resource: T) {
     // TODO: store me in db
-    console.log('storing to IDB', resource);
-    this.openConnection('readwrite');
+    resource.timestamp = Date.now();
+    console.log('write IDB:', resource);
+    this.getObjectStore(
+      this.objectStoreHandle,
+      'readwrite',
+      this.indexedDBversion
+    ).subscribe((objectStore) => {
+      objectStore.add(resource);
+    });
+    /* this.openConnection('readwrite');
     const transaction: IDBTransaction = this.db.transaction(
       this.objectStoreHandle,
       'readwrite'
     );
     this.objectStore = transaction.objectStore(this.objectStoreHandle);
-    this.objectStore.add(resource);
+    this.objectStore.add(resource); */
   }
 
   private openConnection(type: IDBTransactionMode) {
     console.log('openConnection');
     this.initDB(type);
+  }
+
+  private getObjectStore(
+    store: string,
+    mode: IDBTransactionMode,
+    version?: number
+  ): Observable<IDBObjectStore> {
+    const sub = new Observable<IDBObjectStore>((subscriber) => {
+      const dbOpenRequest = window.indexedDB.open(store, version);
+      dbOpenRequest.onupgradeneeded = (event: IDBVersionChangeEvent) => {
+        console.info(
+          `shop db requires update/setup. ld version: ${event.oldVersion}, new version: ${event.newVersion}`
+        );
+        this.db = dbOpenRequest.result;
+        this.db.onerror = (event: Event) => {
+          console.error('db setup encountered error, aborting', event);
+          subscriber.error(event);
+          subscriber.complete();
+        };
+        this.db.createObjectStore(store, {
+          keyPath: 'id',
+        });
+        this.objectStore.createIndex('name', 'name', { unique: false });
+        this.objectStore.createIndex('adress', 'adress', { unique: false });
+        this.objectStore.createIndex('image', 'image', { unique: false });
+      };
+      dbOpenRequest.onsuccess = (event: Event) => {
+        this.db = dbOpenRequest.result;
+        subscriber.next(this.db.transaction(store, mode).objectStore(store));
+        subscriber.complete();
+      };
+    });
+    return sub;
   }
 
   private initDB(

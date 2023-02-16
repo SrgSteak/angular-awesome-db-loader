@@ -11,8 +11,8 @@ import {
 } from '@angular/forms';
 import { HttpClientModule } from '@angular/common/http';
 import { ShopService } from './shop.service';
-import { Observable } from 'rxjs';
-import { ShopInterface } from './shop-interface';
+import { Observable, Subscription } from 'rxjs';
+import { ResourceInterface, ShopInterface } from './shop-interface';
 import { ResourceLoaderService } from './resource-loader.service';
 
 @Component({
@@ -20,47 +20,24 @@ import { ResourceLoaderService } from './resource-loader.service';
   standalone: true,
   imports: [CommonModule, ReactiveFormsModule, HttpClientModule],
   providers: [ShopService, ResourceLoaderService],
-  styles: [
-    '.form-input { display:inline; position: relative; }',
-    'input:focus~label, input:not(:placeholder-shown)~label { transform: scale(0.5); }',
-    'label { pointer-events: none; position: absolute; left: 0; transform-origin: top left; transition: all .2s ease-in-out }',
-    'input { all: unset; display: inline; text-align: center; height: 2rem; }',
-    'input {  appearance: none; -webkit-appearance: none; }',
-    '//input::-webkit-textfield-decoration-container { display: none }',
-    'input::-webkit-outer-spin-button, input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0;}',
-    /* Firefox */
-    'input[type=number] { -moz-appearance: textfield; }',
-  ],
-  template: `<ng-container *ngIf="shop$ | async as shop; else loadingError">
-    {{ shop | json }}
-  </ng-container>
-  <ng-template #loadingError>
-    Loading error
-  </ng-template>`,
+  styles: [],
+  template: `<ng-container *ngIf="shop">{{ shop | json }}</ng-container>`,
 })
 export class App implements OnInit {
-  name = 'Angular';
-  protected birthdayForm = this.fb.group(
-    {
-      day: ['29'],
-      month: ['2'],
-      year: ['2020'],
-    },
-    { validators: birthdayDateValidator }
-  );
-  protected shop$: Observable<ShopInterface>;
+  protected shop: ResourceInterface<ShopInterface>;
+  protected sub: Subscription;
+
   constructor(private fb: FormBuilder, private shopService: ShopService) {}
 
   ngOnInit() {
-    /* this.birthdayForm.valueChanges.subscribe((data) => {
-      if (this.birthdayForm.valid) {
-        console.log(
-          'date:',
-          new Date(`${data.year}-${data.month}-${data.day}`)
-        );
-      }
-    }); */
-    this.shop$ = this.shopService.getById(136);
+    this.sub = this.shopService.getById(136).subscribe(data => {
+      console.log('pulled from:', data.origin);
+      this.shop = data;
+    });
+  }
+
+  ngOnDestroy() {
+    this.sub?.unsubscribe();
   }
 }
 
