@@ -121,7 +121,7 @@ export class ResourceLoaderService {
       'readwrite',
       this.indexedDBversion
     ).subscribe((objectStore) => {
-      objectStore.add(resource);
+      objectStore.put(resource);
     });
     /* this.openConnection('readwrite');
     const transaction: IDBTransaction = this.db.transaction(
