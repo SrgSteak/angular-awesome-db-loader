@@ -13,10 +13,7 @@ import { ResourceInterface, ShopInterface } from './shop-interface';
 
 @Injectable()
 export class ShopService {
-  private observableStore = new Map<
-    string | number,
-    { observable: Observable<any>; loadedData: any }
-  >();
+  private observableStore = new Map<string | number, { observable: Observable<any>; loadedData: any }>();
   constructor(
     private httpClient: HttpClient,
     private resourceLoader: ResourceLoaderService
@@ -105,6 +102,9 @@ export class ShopService {
       );
   }
 
+  /**
+   * comparison function to make data more distinct
+   */
   private deepCompare(
     a: ResourceInterface<any>,
     b: ResourceInterface<any>
