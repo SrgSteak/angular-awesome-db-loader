@@ -9,6 +9,11 @@ export interface ShopInterface extends TimeStampInterface {
   image: string; // url
 }
 
+export interface ResourceEntityInterface {
+  version: number;
+  onUpgradeNeededCallback: (IDBObjectStore) => void;
+}
+
 /**
  * the (private) timestamp that is used to determine the loaders behavior
  */
@@ -28,8 +33,8 @@ export interface ResourceInterface<T extends TimeStampInterface> {
  * Enum telling you where the resource was loaded from
  */
 export enum ResourceOrigin {
-  memory,
-  transferstate,
-  idb,
-  network
+  memory = 'memory',
+  transferstate = 'transferstate',
+  idb = 'idb',
+  network = 'network',
 }

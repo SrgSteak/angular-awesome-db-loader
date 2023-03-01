@@ -1,25 +1,31 @@
 import { HttpClient } from '@angular/common/http';
 import { Injectable } from '@angular/core';
-import {
-  distinctUntilChanged,
-  map,
-  Observable,
-  Observer,
-  Subscriber,
-  TeardownLogic,
-} from 'rxjs';
+import { distinctUntilChanged, map, Observable, Observer } from 'rxjs';
+import { multicastSequencer } from './multicastSequencer';
 import { ResourceLoaderService } from './resource-loader.service';
 import { ResourceInterface, ShopInterface } from './shop-interface';
 
 @Injectable()
 export class ShopService {
-  private observableStore = new Map<string | number, { observable: Observable<any>; loadedData: any }>();
+  private observableStore = new Map<
+    string | number,
+    { observable: Observable<any>; loadedData: any }
+  >();
+
+  private onUpgradeNeededCallback(objectStore: IDBObjectStore) {
+    objectStore.createIndex('name', 'name', { unique: false });
+    objectStore.createIndex('adress', 'adress', { unique: false });
+    objectStore.createIndex('image', 'image', { unique: false });
+  }
+
+  private version = 1;
+
   constructor(
     private httpClient: HttpClient,
     private resourceLoader: ResourceLoaderService
   ) {}
 
-  getById(id: string | number): Observable<ResourceInterface<ShopInterface>> {
+  getById(id: string | number, ): Observable<ResourceInterface<ShopInterface>> {
     const existing = this.observableStore.get(id);
     if (existing) {
       return existing.observable;
@@ -35,7 +41,7 @@ export class ShopService {
   } {
     return {
       observable: new Observable<ResourceInterface<ShopInterface>>(
-        this.multicastSequencer<ResourceInterface<ShopInterface>>(
+        multicastSequencer<ResourceInterface<ShopInterface>>(
           this.loadShopData(id)
         )
       ).pipe(
@@ -58,7 +64,7 @@ export class ShopService {
         // no data yet
         // 5 hours 5 * 3600 * 1000
         this.resourceLoader
-          .getShopById<ShopInterface>(id, {
+          .getResourceById<ShopInterface>(id, {
             subscribable: this.networkLoader(id),
             freshness: 10 * 1000,
           })
@@ -97,6 +103,8 @@ export class ShopService {
             adress: response.body['address'], // Austria, 1120 Vienna
             image: response.body['imagePathBig'], // url};
             timestamp: Date.now(), //- 20 * 1000, // now - 20 sec
+            //onUpgradeNeededCallback: this.onUpgradeNeededCallback,
+            //version: this.version
           };
         })
       );
@@ -120,41 +128,5 @@ export class ShopService {
       }
     }
     return true;
-  }
-
-  /**
-   * Observable function that will allow multiple subscription handling to same resource in a very
-   * fetch conservative manner.
-   */
-  private multicastSequencer<T>(
-    loadData: (observer: Observer<T>) => void
-  ): (subscriber: Subscriber<T>) => TeardownLogic {
-    // keep track of state
-    const observers: Observer<T>[] = [];
-    let loaded = false;
-
-    // return Subscriber => TeardownLogic function for new Observable() call;
-    return (observer: Subscriber<T>) => {
-      observers.push(observer);
-      if (observers.length === 1 || loaded) {
-        loadData({
-          next(value) {
-            observers.forEach((observer) => observer.next(value));
-            loaded = true;
-          },
-          error(error) {
-            console.error(error);
-          },
-          complete() {
-            observers.forEach((observer) => observer.complete());
-          },
-        });
-      }
-
-      // TeardownLogic
-      return () => {
-        observers.splice(observers.indexOf(observer), 1);
-      };
-    };
   }
 }

@@ -1,20 +1,30 @@
 import { isPlatformBrowser } from '@angular/common';
 import { Inject, Injectable, PLATFORM_ID } from '@angular/core';
-import { makeStateKey, TransferState } from '@angular/platform-browser';
-import { map, Observable, tap } from 'rxjs';
+import {
+  makeStateKey,
+  StateKey,
+  TransferState,
+} from '@angular/platform-browser';
+import { Observable, Subscribable, Subscriber, tap } from 'rxjs';
 import {
   ResourceInterface,
   ResourceOrigin,
-  ShopInterface,
   TimeStampInterface,
 } from './shop-interface';
+
+/**
+ * Configuration for the resource loader behavior
+ * @param stale default true. If stale/db data is sufficient or network loader data should always be pulled
+ */
+export interface ResourceConfiguration {
+  stale: boolean;
+}
 
 @Injectable()
 export class ResourceLoaderService {
   private readonly objectStoreHandle = 'shops';
   private readonly indexedDBversion = 1;
   private isBrowser: boolean;
-  private dbopenrequest: IDBOpenDBRequest;
   private objectStore: IDBObjectStore;
   private db: IDBDatabase;
 
@@ -25,14 +35,24 @@ export class ResourceLoaderService {
     this.isBrowser = isPlatformBrowser(platformId);
   }
 
-  getShopById<T extends TimeStampInterface>(
+  getResourceById<T extends TimeStampInterface>(
     id: string | number,
-    networkLoader?: { subscribable: Observable<T>; freshness?: number }
+    networkLoader?: { subscribable: Observable<T>; freshness?: number },
+    resourceOptions = { stale: true }
   ): Observable<ResourceInterface<T>> {
     return new Observable((observer) => {
-      const uniqueIdentifier = 'shop-' + id;
-      const transferKey = makeStateKey<T>(uniqueIdentifier);
+      const transferKey = makeStateKey<T>(id.toString());
       if (this.isBrowser) {
+        // TODO: move me higher in the chain!
+        if (this.transferState.hasKey(transferKey)) {
+          const shop = this.transferState.get(transferKey, null);
+          observer.next({ data: shop, origin: ResourceOrigin.transferstate });
+        } else {
+          console.log(
+            'could not pull data from ',
+            ResourceOrigin.transferstate
+          );
+        }
         try {
           this.getObjectStore(
             this.objectStoreHandle,
@@ -55,43 +75,13 @@ export class ResourceLoaderService {
                   networkLoader &&
                   Date.now() - networkLoader.freshness > shop.timestamp
                 ) {
-                  networkLoader.subscribable
-                    .pipe(
-                      tap((data) => {
-                        if (!this.isBrowser) {
-                          this.transferState.set(transferKey, data);
-                        } else {
-                          this.updateResourceInIDB(data);
-                        }
-                      })
-                    )
-                    .subscribe((data) => {
-                      observer.next({
-                        data: data,
-                        origin: ResourceOrigin.network,
-                      });
-                    });
+                  this.pullFromNetworkLoader(networkLoader, observer);
                 }
               } else {
                 // no shop in db
                 // TODO: we always connect to the server! no 'stale' functionality right now
                 if (networkLoader) {
-                  networkLoader.subscribable
-                    .pipe(
-                      tap((data) => {
-                        if (!this.isBrowser) {
-                          this.transferState.set(transferKey, data);
-                        } else {
-                          this.updateResourceInIDB(data);
-                        }
-                      })
-                    )
-                    .subscribe((data) => {
-                      observer.next({
-                        data: data,
-                        origin: ResourceOrigin.network,
-                      });
-                    });
+                  this.pullFromNetworkLoader(networkLoader, observer);
                 }
               }
             };
@@ -103,17 +93,43 @@ export class ResourceLoaderService {
         } catch (e) {
           console.error(e);
         }
-        // TODO: move me higher in the chain!
-        if (this.transferState.hasKey(transferKey)) {
-          const shop = this.transferState.get(transferKey, null);
-          observer.next({ data: shop, origin: ResourceOrigin.transferstate });
-        }
+      } else {
+        // SSR
+        this.pullFromNetworkLoader(networkLoader, observer, transferKey);
       }
     });
   }
 
+  /**
+   * pull and set data either in idb or transferstate and send data to observers
+   * @param networkLoader <- the networkloader function your service provides
+   * @param observer <- the subscribers to your Observable. They want the data from the network loader
+   * @param transferKey <- the transferKey in your SSR flow. This data will be pulled from the page in the client side run
+   */
+  private pullFromNetworkLoader<T extends TimeStampInterface>(
+    networkLoader: { subscribable: Observable<T>; freshness?: number },
+    observer: Subscriber<ResourceInterface<T>>,
+    transferKey?: StateKey<T>
+  ) {
+    networkLoader.subscribable
+      .pipe(
+        tap((data) => {
+          if (transferKey) {
+            this.transferState.set(transferKey, data);
+          } else {
+            this.updateResourceInIDB(data);
+          }
+        })
+      )
+      .subscribe((data) => {
+        observer.next({
+          data: data,
+          origin: ResourceOrigin.network,
+        });
+      });
+  }
+
   private updateResourceInIDB<T extends TimeStampInterface>(resource: T) {
-    // TODO: store me in db
     resource.timestamp = Date.now();
     console.log('write IDB:', resource);
     this.getObjectStore(
@@ -123,24 +139,13 @@ export class ResourceLoaderService {
     ).subscribe((objectStore) => {
       objectStore.put(resource);
     });
-    /* this.openConnection('readwrite');
-    const transaction: IDBTransaction = this.db.transaction(
-      this.objectStoreHandle,
-      'readwrite'
-    );
-    this.objectStore = transaction.objectStore(this.objectStoreHandle);
-    this.objectStore.add(resource); */
-  }
-
-  private openConnection(type: IDBTransactionMode) {
-    console.log('openConnection');
-    this.initDB(type);
   }
 
   private getObjectStore(
     store: string,
     mode: IDBTransactionMode,
-    version?: number
+    version?: number,
+    onUpgradeNeededCallback?: (objectStore: IDBObjectStore) => void
   ): Observable<IDBObjectStore> {
     const sub = new Observable<IDBObjectStore>((subscriber) => {
       const dbOpenRequest = window.indexedDB.open(store, version);
@@ -168,54 +173,5 @@ export class ResourceLoaderService {
       };
     });
     return sub;
-  }
-
-  private initDB(
-    type: IDBTransactionMode,
-    write?: ShopInterface,
-    read?: string | number
-  ) {
-    this.dbopenrequest = window.indexedDB.open(
-      this.objectStoreHandle,
-      this.indexedDBversion
-    );
-    this.dbopenrequest.onupgradeneeded = (event: IDBVersionChangeEvent) => {
-      console.group();
-      console.info(
-        `shop db requires update/setup. ld version: ${event.oldVersion}, new version: ${event.newVersion}`
-      );
-      console.log(typeof event.target);
-      this.db = (event.target as any).result; // TODO: get correct type;
-      this.db.onerror = (event) => {
-        console.error('db setup encountered error, aborting', event);
-      };
-
-      this.objectStore = this.db.createObjectStore(this.objectStoreHandle, {
-        keyPath: 'id',
-      });
-      this.objectStore.createIndex('name', 'name', { unique: false });
-      this.objectStore.createIndex('adress', 'adress', { unique: false });
-      this.objectStore.createIndex('image', 'image', { unique: false });
-
-      console.groupEnd();
-    };
-    this.dbopenrequest.onsuccess = (event: Event) => {
-      this.db = this.dbopenrequest.result; // ich lebe lang
-      const transaction: IDBTransaction = this.db.transaction(
-        // ich lebe kurz
-        this.objectStoreHandle,
-        'readwrite'
-      );
-      this.objectStore = transaction.objectStore(this.objectStoreHandle);
-      if (write) {
-        this.objectStore.add(write);
-      }
-      if (read) {
-        const req = this.objectStore.get(read);
-        req.onsuccess = (event: Event) => {
-          console.log('read from db:', req.result);
-        };
-      }
-    };
   }
 }
