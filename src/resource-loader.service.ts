@@ -5,8 +5,9 @@ import {
   StateKey,
   TransferState,
 } from '@angular/platform-browser';
-import { Observable, Subscribable, Subscriber, tap } from 'rxjs';
+import { Observable, Subscriber, tap } from 'rxjs';
 import {
+  ResourceEntityInterface,
   ResourceInterface,
   ResourceOrigin,
   TimeStampInterface,
@@ -25,8 +26,6 @@ export class ResourceLoaderService {
   private readonly objectStoreHandle = 'shops';
   private readonly indexedDBversion = 1;
   private isBrowser: boolean;
-  private objectStore: IDBObjectStore;
-  private db: IDBDatabase;
 
   constructor(
     private transferState: TransferState,
@@ -42,8 +41,8 @@ export class ResourceLoaderService {
   ): Observable<ResourceInterface<T>> {
     return new Observable((observer) => {
       const transferKey = makeStateKey<T>(id.toString());
+      // we run in the clients browser. Pull order: transferkey -> idb -> networkLoader
       if (this.isBrowser) {
-        // TODO: move me higher in the chain!
         if (this.transferState.hasKey(transferKey)) {
           const shop = this.transferState.get(transferKey, null);
           observer.next({ data: shop, origin: ResourceOrigin.transferstate });
@@ -54,11 +53,10 @@ export class ResourceLoaderService {
           );
         }
         try {
-          this.getObjectStore(
-            this.objectStoreHandle,
-            'readonly',
-            this.indexedDBversion
-          ).subscribe((objectStore) => {
+          this.getObjectStore(this.objectStoreHandle, 'readonly', {
+            version: this.indexedDBversion,
+            onUpgradeNeededCallback: () => {},
+          }).subscribe((objectStore) => {
             const result = objectStore.get(id);
             result.onsuccess = (event: Event) => {
               const shop = result.result as T;
@@ -132,43 +130,47 @@ export class ResourceLoaderService {
   private updateResourceInIDB<T extends TimeStampInterface>(resource: T) {
     resource.timestamp = Date.now();
     console.log('write IDB:', resource);
-    this.getObjectStore(
-      this.objectStoreHandle,
-      'readwrite',
-      this.indexedDBversion
-    ).subscribe((objectStore) => {
+    this.getObjectStore(this.objectStoreHandle, 'readwrite', {
+      version: this.indexedDBversion,
+      onUpgradeNeededCallback: () => {},
+    }).subscribe((objectStore) => {
       objectStore.put(resource);
     });
   }
 
+  /**
+   * 90% boilerplate to get read/write access to the IDB in your browser.
+   */
   private getObjectStore(
     store: string,
     mode: IDBTransactionMode,
-    version?: number,
-    onUpgradeNeededCallback?: (objectStore: IDBObjectStore) => void
+    configuration: ResourceEntityInterface
   ): Observable<IDBObjectStore> {
     const sub = new Observable<IDBObjectStore>((subscriber) => {
-      const dbOpenRequest = window.indexedDB.open(store, version);
+      const dbOpenRequest = window.indexedDB.open(store, configuration.version);
       dbOpenRequest.onupgradeneeded = (event: IDBVersionChangeEvent) => {
         console.info(
           `shop db requires update/setup. ld version: ${event.oldVersion}, new version: ${event.newVersion}`
         );
-        this.db = dbOpenRequest.result;
-        this.db.onerror = (event: Event) => {
+        const db = dbOpenRequest.result;
+        db.onerror = (event: Event) => {
           console.error('db setup encountered error, aborting', event);
           subscriber.error(event);
           subscriber.complete();
         };
-        this.db.createObjectStore(store, {
+        const objectStore = db.createObjectStore(store, {
           keyPath: 'id',
         });
-        this.objectStore.createIndex('name', 'name', { unique: false });
-        this.objectStore.createIndex('adress', 'adress', { unique: false });
-        this.objectStore.createIndex('image', 'image', { unique: false });
+        // TODO: let onUpgradeNeededCallback handle this
+        configuration.onUpgradeNeededCallback(objectStore);
+        objectStore.createIndex('name', 'name', { unique: false });
+        objectStore.createIndex('adress', 'adress', { unique: false });
+        objectStore.createIndex('image', 'image', { unique: false });
       };
       dbOpenRequest.onsuccess = (event: Event) => {
-        this.db = dbOpenRequest.result;
-        subscriber.next(this.db.transaction(store, mode).objectStore(store));
+        subscriber.next(
+          dbOpenRequest.result.transaction(store, mode).objectStore(store)
+        );
         subscriber.complete();
       };
     });

@@ -25,7 +25,7 @@ export class ShopService {
     private resourceLoader: ResourceLoaderService
   ) {}
 
-  getById(id: string | number, ): Observable<ResourceInterface<ShopInterface>> {
+  getById(id: string | number): Observable<ResourceInterface<ShopInterface>> {
     const existing = this.observableStore.get(id);
     if (existing) {
       return existing.observable;
