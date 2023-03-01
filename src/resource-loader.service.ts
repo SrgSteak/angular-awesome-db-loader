@@ -45,6 +45,7 @@ export class ResourceLoaderService {
       if (this.isBrowser) {
         if (this.transferState.hasKey(transferKey)) {
           const shop = this.transferState.get(transferKey, null);
+          this.transferState.remove(transferKey);
           observer.next({ data: shop, origin: ResourceOrigin.transferstate });
         } else {
           console.log(
