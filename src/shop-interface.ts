@@ -9,9 +9,13 @@ export interface ShopInterface extends TimeStampInterface {
   image: string; // url
 }
 
+/**
+ * your service or class that handles your entity access needs to implement this interface to allow the resource-loader to handle the IDB Layer
+ */
 export interface ResourceEntityInterface {
   version: number;
-  onUpgradeNeededCallback: (IDBObjectStore: IDBObjectStore) => void;
+  objectStoreHandle: string;
+  onUpgradeNeededCallback: (IDBObjectStore: IDBObjectStore, oldVersion?: any, newVersion?: any) => void;
 }
 
 /**

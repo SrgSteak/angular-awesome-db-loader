@@ -23,8 +23,6 @@ export interface ResourceConfiguration {
 
 @Injectable()
 export class ResourceLoaderService {
-  private readonly objectStoreHandle = 'shops';
-  private readonly indexedDBversion = 1;
   private isBrowser: boolean;
 
   constructor(
@@ -56,7 +54,7 @@ export class ResourceLoaderService {
           );
         }
         try {
-          this.getObjectStore(this.objectStoreHandle, 'readonly', configuration.idbUpdateEvent).subscribe((objectStore) => {
+          this.getObjectStore('readonly', configuration.idbUpdateEvent).subscribe((objectStore) => {
             const result = objectStore.get(id);
             result.onsuccess = (event: Event) => {
               const shop = result.result as T;
@@ -73,13 +71,13 @@ export class ResourceLoaderService {
                   configuration.networkLoader &&
                   Date.now() - configuration.networkLoader.freshness > shop.timestamp
                 ) {
-                  this.pullFromNetworkLoader(configuration.networkLoader, observer);
+                  this.pullFromNetworkLoader(configuration.networkLoader, configuration.idbUpdateEvent, observer);
                 }
               } else {
                 // no shop in db
                 // TODO: we always connect to the server! no 'stale' functionality right now
                 if (configuration.networkLoader) {
-                  this.pullFromNetworkLoader(configuration.networkLoader, observer);
+                  this.pullFromNetworkLoader(configuration.networkLoader, configuration.idbUpdateEvent, observer);
                 }
               }
             };
@@ -93,7 +91,7 @@ export class ResourceLoaderService {
         }
       } else {
         // SSR
-        this.pullFromNetworkLoader(configuration.networkLoader, observer, transferKey);
+        this.pullFromNetworkLoader(configuration.networkLoader, configuration.idbUpdateEvent, observer, transferKey);
       }
     });
   }
@@ -106,6 +104,7 @@ export class ResourceLoaderService {
    */
   private pullFromNetworkLoader<T extends TimeStampInterface>(
     networkLoader: { subscribable: Observable<T>; freshness?: number },
+    idbConfig: ResourceEntityInterface,
     observer: Subscriber<ResourceInterface<T>>,
     transferKey?: StateKey<T>
   ) {
@@ -115,7 +114,7 @@ export class ResourceLoaderService {
           if (transferKey) {
             this.transferState.set(transferKey, data);
           } else {
-            this.updateResourceInIDB(data);
+            this.updateResourceInIDB(data, idbConfig);
           }
         })
       )
@@ -127,13 +126,10 @@ export class ResourceLoaderService {
       });
   }
 
-  private updateResourceInIDB<T extends TimeStampInterface>(resource: T) {
+  private updateResourceInIDB<T extends TimeStampInterface>(resource: T, configuration: ResourceEntityInterface) {
     resource.timestamp = Date.now();
     console.log('write IDB:', resource);
-    this.getObjectStore(this.objectStoreHandle, 'readwrite', {
-      version: this.indexedDBversion,
-      onUpgradeNeededCallback: () => {},
-    }).subscribe((objectStore) => {
+    this.getObjectStore('readwrite', configuration).subscribe((objectStore) => {
       objectStore.put(resource);
     });
   }
@@ -142,12 +138,11 @@ export class ResourceLoaderService {
    * 90% boilerplate to get read/write access to the IDB in your browser.
    */
   private getObjectStore(
-    store: string,
     mode: IDBTransactionMode,
     configuration: ResourceEntityInterface
   ): Observable<IDBObjectStore> {
     const sub = new Observable<IDBObjectStore>((subscriber) => {
-      const dbOpenRequest = window.indexedDB.open(store, configuration.version);
+      const dbOpenRequest = window.indexedDB.open(configuration.objectStoreHandle, configuration.version);
       dbOpenRequest.onupgradeneeded = (event: IDBVersionChangeEvent) => {
         console.info(
           `shop db requires update/setup. ld version: ${event.oldVersion}, new version: ${event.newVersion}`
@@ -158,14 +153,14 @@ export class ResourceLoaderService {
           subscriber.error(event);
           subscriber.complete();
         };
-        const objectStore = db.createObjectStore(store, {
+        const objectStore = db.createObjectStore(configuration.objectStoreHandle, {
           keyPath: 'id',
         });
-        configuration.onUpgradeNeededCallback(objectStore);
+        configuration.onUpgradeNeededCallback(objectStore, event.oldVersion, event.newVersion);
       };
       dbOpenRequest.onsuccess = (event: Event) => {
         subscriber.next(
-          dbOpenRequest.result.transaction(store, mode).objectStore(store)
+          dbOpenRequest.result.transaction(configuration.objectStoreHandle, mode).objectStore(configuration.objectStoreHandle)
         );
         subscriber.complete();
       };

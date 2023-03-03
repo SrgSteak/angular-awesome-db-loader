@@ -20,6 +20,8 @@ export class ShopService {
 
   private version = 1;
 
+  private objectStoreHandle = 'shops';
+
   constructor(
     private httpClient: HttpClient,
     private resourceLoader: ResourceLoaderService
@@ -71,6 +73,7 @@ export class ShopService {
             },
             idbUpdateEvent: {
               version: this.version,
+              objectStoreHandle: this.objectStoreHandle,
               onUpgradeNeededCallback: this.onUpgradeNeededCallback
             }
           })
