@@ -36,8 +36,10 @@ export class ResourceLoaderService {
 
   getResourceById<T extends TimeStampInterface>(
     id: string | number,
-    networkLoader?: { subscribable: Observable<T>; freshness?: number },
-    resourceOptions = { stale: true }
+    configuration: {
+      networkLoader?: { subscribable: Observable<T>; freshness?: number, staleAllowed?: boolean },
+      idbUpdateEvent?: ResourceEntityInterface
+    }
   ): Observable<ResourceInterface<T>> {
     return new Observable((observer) => {
       const transferKey = makeStateKey<T>(id.toString());
@@ -54,10 +56,7 @@ export class ResourceLoaderService {
           );
         }
         try {
-          this.getObjectStore(this.objectStoreHandle, 'readonly', {
-            version: this.indexedDBversion,
-            onUpgradeNeededCallback: () => {},
-          }).subscribe((objectStore) => {
+          this.getObjectStore(this.objectStoreHandle, 'readonly', configuration.idbUpdateEvent).subscribe((objectStore) => {
             const result = objectStore.get(id);
             result.onsuccess = (event: Event) => {
               const shop = result.result as T;
@@ -66,21 +65,21 @@ export class ResourceLoaderService {
                 observer.next({ data: shop, origin: ResourceOrigin.idb });
                 console.log(
                   'comparing:',
-                  new Date(Date.now() - networkLoader.freshness),
+                  new Date(Date.now() - configuration.networkLoader.freshness),
                   new Date(shop.timestamp),
-                  Date.now() - networkLoader.freshness - shop.timestamp
+                  Date.now() - configuration.networkLoader.freshness - shop.timestamp
                 );
                 if (
-                  networkLoader &&
-                  Date.now() - networkLoader.freshness > shop.timestamp
+                  configuration.networkLoader &&
+                  Date.now() - configuration.networkLoader.freshness > shop.timestamp
                 ) {
-                  this.pullFromNetworkLoader(networkLoader, observer);
+                  this.pullFromNetworkLoader(configuration.networkLoader, observer);
                 }
               } else {
                 // no shop in db
                 // TODO: we always connect to the server! no 'stale' functionality right now
-                if (networkLoader) {
-                  this.pullFromNetworkLoader(networkLoader, observer);
+                if (configuration.networkLoader) {
+                  this.pullFromNetworkLoader(configuration.networkLoader, observer);
                 }
               }
             };
@@ -94,7 +93,7 @@ export class ResourceLoaderService {
         }
       } else {
         // SSR
-        this.pullFromNetworkLoader(networkLoader, observer, transferKey);
+        this.pullFromNetworkLoader(configuration.networkLoader, observer, transferKey);
       }
     });
   }
@@ -162,11 +161,7 @@ export class ResourceLoaderService {
         const objectStore = db.createObjectStore(store, {
           keyPath: 'id',
         });
-        // TODO: let onUpgradeNeededCallback handle this
         configuration.onUpgradeNeededCallback(objectStore);
-        objectStore.createIndex('name', 'name', { unique: false });
-        objectStore.createIndex('adress', 'adress', { unique: false });
-        objectStore.createIndex('image', 'image', { unique: false });
       };
       dbOpenRequest.onsuccess = (event: Event) => {
         subscriber.next(

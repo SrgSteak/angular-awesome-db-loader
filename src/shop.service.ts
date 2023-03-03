@@ -14,7 +14,7 @@ export class ShopService {
 
   private onUpgradeNeededCallback(objectStore: IDBObjectStore) {
     objectStore.createIndex('name', 'name', { unique: false });
-    objectStore.createIndex('adress', 'adress', { unique: false });
+    objectStore.createIndex('address', 'address', { unique: false });
     objectStore.createIndex('image', 'image', { unique: false });
   }
 
@@ -65,8 +65,14 @@ export class ShopService {
         // 5 hours 5 * 3600 * 1000
         this.resourceLoader
           .getResourceById<ShopInterface>(id, {
-            subscribable: this.networkLoader(id),
-            freshness: 10 * 1000,
+            networkLoader: {
+              subscribable: this.networkLoader(id),
+              freshness: 10 * 1000
+            },
+            idbUpdateEvent: {
+              version: this.version,
+              onUpgradeNeededCallback: this.onUpgradeNeededCallback
+            }
           })
           .subscribe({
             next: (resource: ResourceInterface<ShopInterface>) => {
@@ -100,7 +106,7 @@ export class ShopService {
           return {
             id: response.body['id'], // 136 | A136
             name: response.body['name'], // Robin's awesome webshop for skis
-            adress: response.body['address'], // Austria, 1120 Vienna
+            address: response.body['address'], // Austria, 1120 Vienna
             image: response.body['imagePathBig'], // url};
             timestamp: Date.now(), //- 20 * 1000, // now - 20 sec
             //onUpgradeNeededCallback: this.onUpgradeNeededCallback,

@@ -5,13 +5,13 @@
 export interface ShopInterface extends TimeStampInterface {
   id: string; // 136 | A136
   name: string; // Robin's awesome webshop for skis
-  adress: string; // Austria, 1120 Vienna
+  address: string; // Austria, 1120 Vienna
   image: string; // url
 }
 
 export interface ResourceEntityInterface {
   version: number;
-  onUpgradeNeededCallback: (IDBObjectStore) => void;
+  onUpgradeNeededCallback: (IDBObjectStore: IDBObjectStore) => void;
 }
 
 /**
